@@ -1,18 +1,20 @@
-import * as React from "react";
-import { cn } from "../../lib/utils";
+"use client"
 
-export type LabelProps = React.LabelHTMLAttributes<HTMLLabelElement>;
+import * as React from "react"
 
-const Label = React.forwardRef<HTMLLabelElement, LabelProps>(
-  ({ className, ...props }, ref) => (
+import { cn } from "../../lib/utils"
+
+function Label({ className, ...props }: React.ComponentProps<"label">) {
+  return (
     <label
-      ref={ref}
-      className={cn("text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70", className)}
+      data-slot="label"
+      className={cn(
+        "gap-2 text-sm leading-none font-medium group-data-[disabled=true]:opacity-50 peer-disabled:opacity-50 flex items-center select-none group-data-[disabled=true]:pointer-events-none peer-disabled:cursor-not-allowed",
+        className
+      )}
       {...props}
     />
-  ),
-);
+  )
+}
 
-Label.displayName = "Label";
-
-export { Label };
+export { Label }
