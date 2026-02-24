@@ -1,14 +1,19 @@
-from fastapi import FastAPI, HTTPException
+from collections import deque
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from typing import Any
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urldefrag, urljoin, urlunparse
 import requests
-from urllib.parse import urljoin
+
 app = FastAPI()
 
-class ReviewRequest(BaseModel):
-    url: HttpUrl
+class UrlCrawl(BaseModel):
+    start_url: HttpUrl
+    max_pages: int = 500
+    max_depth: int = 2
+    same_domain_only: bool = True
+    include_subdomains: bool = False
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,48 +23,126 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/review-url")
-def review_url(body: ReviewRequest) -> dict[str, Any]:
-    try:
-        response = requests.get(
-            str(body.url),
-            timeout=10,
-            headers={"User-Agent": "CorsiftBot/1.0"}
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {e}")
-    
-    soup = BeautifulSoup(response.text, "lxml")
 
-    title_tag = soup.find("title")
-    title = title_tag.get_text(strip=True) if title_tag else "No title found"
+def normalize_url(raw_url: str) -> str:
+    no_fragment, _ = urldefrag(raw_url)
+    p = urlparse(no_fragment)
+    path = p.path or "/"
+    return urlunparse((p.scheme, p.netloc.lower(), path.rstrip("/") or "/", "", "", ""))
 
-    meta_desc_tag = soup.find("meta", attrs={"name": "description"})
-    meta_description = ""
-    if isinstance(meta_desc_tag, Tag):
-        content = meta_desc_tag.get("content", "")
-        if isinstance(content, str):
-            meta_description = content.strip()
 
-    h1: list[str] = []
-    for h1_tag in soup.find_all("h1"):
-        if isinstance(h1_tag, Tag):
-            h1.append(h1_tag.get_text("", strip=True))
-    
-    links: list[str] = []
-    for a_tag in soup.select("a", href=True):
-        if not isinstance(a_tag, Tag):
+def same_site(url: str, root_host:str, include_subdomains: bool) -> bool:
+    host = urlparse(url).netloc.lower()
+    if include_subdomains:
+        return host == root_host or host.endswith("." + root_host)
+    return host == root_host
+
+def meta_by_name(soup, name: str) -> str:
+    tag = soup.select_one(f'meta[name="{name}"]')
+    value = tag.get("content") if tag else None
+    return value.strip() if isinstance(value, str) else ""
+
+def meta_by_property(soup, prop: str) -> str:
+    tag = soup.select_one(f'meta[property="{prop}"]')
+    value = tag.get("content") if tag else None
+    return value.strip() if isinstance(value, str) else ""
+
+@app.post("/crawl")
+def crawl_url(body: UrlCrawl):
+    return crawl_site(
+        start_url=str(body.start_url),
+        max_pages=body.max_pages,
+        max_depth=body.max_depth,
+        include_subdomains=body.include_subdomains,
+        same_domain_only=body.same_domain_only
+    )
+
+def crawl_site(start_url: str, max_pages: int, max_depth: int, include_subdomains: bool, same_domain_only: bool):
+    root = normalize_url(start_url)
+    root_host = urlparse(root).netloc.lower()
+
+    queue = deque([(root, 0)])
+    visited = set()
+    pages = []
+
+    while queue and len(pages) < max_pages:
+        current_url, depth = queue.popleft()
+        current_url = normalize_url(current_url)
+
+        if current_url in visited:
             continue
-        href = a_tag["href"]
-        if isinstance(href, str) and href:
-            links.append(urljoin(str(body.url), href.strip()))
-    
-    return {
-        "url": str(body.url),
-        "title": title,
-        "meta_description": meta_description,
-        "h1": h1,
-        "link_count": len(links),
-        "sample_links": links[:10]
-    }
+        visited.add(current_url)
+
+        if depth > max_depth:
+            continue
+
+        if not same_site(current_url, root_host, include_subdomains) and same_domain_only:
+            continue
+
+        try:
+            r = requests.get(current_url, timeout=10, headers={"User-Agent": "CorsiftBot/1.0"})
+            r.raise_for_status()
+            if "text/html" not in r.headers.get("Content-Type", ""):
+                continue
+        except requests.RequestException:
+            continue
+
+        soup = BeautifulSoup(r.text, "lxml")
+
+        title = soup.title.get_text(strip=True) if soup.title else ""
+        headings = [h.get_text("", strip=True) for h in soup.select("h1,h2,h3,h4,h5,h6")]
+        images = []
+        for img in soup.select("img[src]"):
+            src = img.get("src")
+            alt = img.get("alt", "")
+            if isinstance(src, str) and src.strip():
+                images.append({
+                    "src": urljoin(current_url, src.strip()),
+                    "alt": alt if isinstance(alt, str) else ""
+                })
+        links = []
+
+        for a in soup.select("a[href]"):
+            href = a.get("href")
+            if not isinstance(href, str) or not href.strip():
+                continue
+
+            abs_url = normalize_url(urljoin(current_url, href.strip()))
+            links.append(abs_url)
+
+            if depth < max_depth and abs_url not in visited:
+                if (not same_domain_only) or same_site(abs_url, root_host, include_subdomains):
+                    queue.append((abs_url, depth + 1))
+
+
+        canonical_tag = soup.select_one('link[rel="canonical"]')
+        canonical = canonical_tag.get("href") if canonical_tag else None
+        canonical = canonical.strip() if isinstance(canonical, str) else ""
+
+        meta = {
+            "description": meta_by_name(soup, "description"),
+            "robots": meta_by_name(soup, "robots"),
+            "canonical": canonical,
+            "og": {
+                "title": meta_by_property(soup, "og:title"),
+                "description": meta_by_property(soup, "og:description"),
+                "image": meta_by_property(soup, "og:image"),
+            },
+            "twitter": {
+                "card": meta_by_name(soup, "twitter:card"),
+                "title": meta_by_name(soup, "twitter:title"),
+                "description": meta_by_name(soup, "twitter:description"),
+            },
+        }
+
+                
+        pages.append({
+            "url": current_url,
+            "title": title,
+            "headings": headings,
+            "images": images,
+            "links": links,
+            "meta": meta
+        })
+
+    return { "start_url": root, "pages_crawled": len(pages), "visited_count": len(visited), "pages": pages }

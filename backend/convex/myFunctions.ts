@@ -1,78 +1,381 @@
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { query, mutation, action } from "./_generated/server";
-import { api } from "./_generated/api";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import {
+  action,
+  internalAction,
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
 
-// Write your Convex functions in any file inside this directory (`convex`).
-// See https://docs.convex.dev/functions for more.
+type AuditIssue = {
+  severity: "low" | "medium" | "high";
+  category: "technical" | "content" | "seo";
+  title: string;
+  description: string;
+  pageUrl: string;
+};
 
-// You can read data from the database via a query:
-export const listNumbers = query({
-  // Validators for arguments.
-  args: {
-    count: v.number(),
-  },
-
-  // Query implementation.
-  handler: async (ctx, args) => {
-    //// Read the database as many times as you need here.
-    //// See https://docs.convex.dev/database/reading-data.
-    const numbers = await ctx.db
-      .query("numbers")
-      // Ordered by _creationTime, return most recent
-      .order("desc")
-      .take(args.count);
-    return {
-      viewer: (await ctx.auth.getUserIdentity())?.name ?? null,
-      numbers: numbers.reverse().map((number) => number.value),
+type CrawlPage = {
+  url: string;
+  title: string;
+  headings: string[];
+  images: Array<{ src: string; alt: string }>;
+  links: string[];
+  meta: {
+    description: string;
+    robots: string;
+    canonical: string;
+    og?: {
+      title?: string;
+      description?: string;
+      image?: string;
     };
+    twitter?: {
+      card?: string;
+      title?: string;
+      description?: string;
+    };
+  };
+};
+
+type CrawlResponse = {
+  start_url: string;
+  pages_crawled: number;
+  visited_count: number;
+  pages: CrawlPage[];
+};
+
+type StartUrlReviewWithDetailsResult = {
+  auditId: Id<"audits">;
+  siteId: Id<"sites">;
+  crawl: CrawlResponse;
+};
+
+async function createAuditForUser(
+  db: MutationCtx["db"],
+  userId: Id<"users">,
+  url: string
+) {
+  const now = Date.now();
+  const normalizedUrl = url.trim();
+
+  let site = await db
+    .query("sites")
+    .withIndex("byUserIdAndUrl", (q) => q.eq("userId", userId).eq("url", normalizedUrl))
+    .unique();
+
+  if (!site) {
+    const siteId = await db.insert("sites", {
+      userId,
+      url: normalizedUrl,
+      name: normalizedUrl,
+      cmsType: null,
+      hasCmsCredentials: false,
+      gscConnected: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    site = await db.get("sites", siteId);
+    if (!site) throw new Error("Failed to create site");
+  }
+
+  const auditId = await db.insert("audits", {
+    siteId: site._id,
+    status: "pending",
+    issues: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await db.patch("sites", site._id, {
+    lastAuditId: auditId,
+    lastAuditAt: now,
+    updatedAt: now,
+  });
+
+  return { auditId, siteId: site._id, normalizedUrl };
+}
+
+function getScraperApiUrl() {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env;
+  const scraperApiUrl = env?.SCRAPER_API_URL;
+
+  if (!scraperApiUrl) {
+    throw new Error("SCRAPER_API_URL is not configured");
+  }
+
+  return scraperApiUrl;
+}
+
+async function crawlSite(startUrl: string): Promise<CrawlResponse> {
+  const response = await fetch(`${getScraperApiUrl()}/crawl`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      start_url: startUrl,
+      max_pages: 500,
+      max_depth: 2,
+      same_domain_only: true,
+      include_subdomains: false,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Crawler failed: ${response.status}`);
+  }
+
+  return (await response.json()) as CrawlResponse;
+}
+
+function buildIssuesFromPages(pages: CrawlPage[]): AuditIssue[] {
+  const issues: AuditIssue[] = [];
+
+  for (const page of pages) {
+    if (!page.title?.trim()) {
+      issues.push({
+        severity: "medium",
+        category: "content",
+        title: "Missing page title",
+        description: "Page has no <title> tag content.",
+        pageUrl: page.url,
+      });
+    }
+
+    if (!page.meta?.description?.trim()) {
+      issues.push({
+        severity: "medium",
+        category: "seo",
+        title: "Missing meta description",
+        description: "Page is missing meta description.",
+        pageUrl: page.url,
+      });
+    }
+
+    const missingAlt = page.images.filter((img) => !img.alt?.trim()).length;
+    if (missingAlt > 0) {
+      issues.push({
+        severity: "low",
+        category: "content",
+        title: "Images missing alt text",
+        description: `${missingAlt} image(s) missing alt text.`,
+        pageUrl: page.url,
+      });
+    }
+  }
+
+  return issues;
+}
+
+export const getUserProfile = query({
+  args: { userId: v.id("users") },
+  handler: async ({ db }, { userId }) => {
+    const profile = await db
+      .query("userProfiles")
+      .withIndex("byUserId", (q) => q.eq("userId", userId))
+      .unique();
+
+    if (!profile) {
+      throw new Error("User profile not found");
+    }
+
+    return profile;
   },
 });
 
-// You can write data to the database via a mutation:
-export const addNumber = mutation({
-  // Validators for arguments.
+export const createAuditRecord = internalMutation({
   args: {
-    value: v.number(),
+    userId: v.id("users"),
+    url: v.string(),
   },
-
-  // Mutation implementation.
-  handler: async (ctx, args) => {
-    //// Insert or modify documents in the database here.
-    //// Mutations can also read from the database like queries.
-    //// See https://docs.convex.dev/database/writing-data.
-
-    const id = await ctx.db.insert("numbers", { value: args.value });
-
-    console.log("Added new document with id:", id);
-    // Optionally, return a value from your mutation.
-    // return id;
+  handler: async ({ db }, { userId, url }) => {
+    return await createAuditForUser(db, userId, url);
   },
 });
 
-// You can fetch data from and send data to third-party APIs via an action:
-export const myAction = action({
-  // Validators for arguments.
+export const startUrlReview = mutation({
   args: {
-    first: v.number(),
-    second: v.string(),
+    url: v.string(),
   },
+  handler: async ({ db, scheduler, auth }, { url }) => {
+    const userId = await getAuthUserId({ auth });
+    if (!userId) {
+      throw new Error("User is not authenticated");
+    }
 
-  // Action implementation.
-  handler: async (ctx, args) => {
-    //// Use the browser-like `fetch` API to send HTTP requests.
-    //// See https://docs.convex.dev/functions/actions#calling-third-party-apis-and-using-npm-packages.
-    // const response = await ctx.fetch("https://api.thirdpartyservice.com");
-    // const data = await response.json();
+    const created = await createAuditForUser(db, userId, url);
 
-    //// Query data by running Convex queries.
-    const data = await ctx.runQuery(api.myFunctions.listNumbers, {
-      count: 10,
+    await scheduler.runAfter(0, internal.myFunctions.runUrlReview, {
+      auditId: created.auditId,
+      startUrl: created.normalizedUrl,
     });
-    console.log(data);
 
-    //// Write data by running Convex mutations.
-    await ctx.runMutation(api.myFunctions.addNumber, {
-      value: args.first,
+    return { auditId: created.auditId, siteId: created.siteId };
+  },
+});
+
+export const startUrlReviewWithDetails = action({
+  args: {
+    url: v.string(),
+  },
+  handler: async (ctx, { url }): Promise<StartUrlReviewWithDetailsResult> => {
+    const userId = await getAuthUserId({ auth: ctx.auth });
+    if (!userId) {
+      throw new Error("User is not authenticated");
+    }
+
+    const created: {
+      auditId: Id<"audits">;
+      siteId: Id<"sites">;
+      normalizedUrl: string;
+    } = await ctx.runMutation(internal.myFunctions.createAuditRecord, {
+      userId,
+      url,
     });
+
+    try {
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId: created.auditId,
+        status: "crawling",
+      });
+
+      const crawl = await crawlSite(created.normalizedUrl);
+
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId: created.auditId,
+        status: "analysing",
+      });
+
+      const issues = buildIssuesFromPages(crawl.pages);
+
+      await ctx.runMutation(internal.myFunctions.completeAudit, {
+        auditId: created.auditId,
+        issues,
+        pagesScanned: crawl.pages_crawled,
+      });
+
+      return {
+        auditId: created.auditId,
+        siteId: created.siteId,
+        crawl,
+      };
+    } catch (error) {
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId: created.auditId,
+        status: "failed",
+      });
+
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("URL review failed");
+    }
+  },
+});
+
+export const getAudit = query({
+  args: {
+    auditId: v.id("audits"),
+  },
+  handler: async ({ db, auth }, { auditId }) => {
+    const userId = await getAuthUserId({ auth });
+    if (!userId) {
+      throw new Error("User is not authenticated");
+    }
+
+    const audit = await db.get("audits", auditId);
+    if (!audit) {
+      return null;
+    }
+
+    const site = await db.get("sites", audit.siteId);
+    if (!site || site.userId !== userId) {
+      throw new Error("Audit not found");
+    }
+
+    return { audit, site };
+  },
+});
+
+export const completeAudit = internalMutation({
+  args: {
+    auditId: v.id("audits"),
+    pagesScanned: v.number(),
+    issues: v.array(
+      v.object({
+        severity: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
+        category: v.union(v.literal("technical"), v.literal("content"), v.literal("seo")),
+        title: v.string(),
+        description: v.string(),
+        pageUrl: v.string(),
+      })
+    ),
+  },
+  handler: async ({ db }, { auditId, issues, pagesScanned }) => {
+    await db.patch("audits", auditId, {
+      status: "complete",
+      issues,
+      pagesScanned,
+      completedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const setAuditStatus = internalMutation({
+  args: {
+    auditId: v.id("audits"),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("crawling"),
+      v.literal("analysing"),
+      v.literal("complete"),
+      v.literal("failed")
+    ),
+  },
+  handler: async ({ db }, { auditId, status }) => {
+    await db.patch("audits", auditId, {
+      status,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const runUrlReview = internalAction({
+  args: {
+    auditId: v.id("audits"),
+    startUrl: v.string(),
+  },
+  handler: async (ctx, { auditId, startUrl }) => {
+    try {
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId,
+        status: "crawling",
+      });
+
+      const crawl = await crawlSite(startUrl);
+
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId,
+        status: "analysing",
+      });
+
+      const issues = buildIssuesFromPages(crawl.pages);
+
+      await ctx.runMutation(internal.myFunctions.completeAudit, {
+        auditId,
+        issues,
+        pagesScanned: crawl.pages_crawled,
+      });
+    } catch {
+      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
+        auditId,
+        status: "failed",
+      });
+    }
   },
 });

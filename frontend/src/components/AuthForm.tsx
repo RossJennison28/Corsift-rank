@@ -1,5 +1,6 @@
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -7,7 +8,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
 type AuthMode = "login" | "register";
-type AuthStep = AuthMode | { email: string };
 
 type AuthFormProps = {
   initialMode: AuthMode;
@@ -15,143 +15,95 @@ type AuthFormProps = {
 
 function AuthForm({ initialMode }: AuthFormProps) {
   const { signIn } = useAuthActions();
-  const [step, setStep] = useState<AuthStep>(initialMode);
+  const [mode, setMode] = useState<AuthMode>(initialMode);
   const [error, setError] = useState<string | null>(null);
-  const isCredentialsStep = step === "login" || step === "register";
-  const mode = isCredentialsStep ? step : initialMode;
-  const providerFlow = step === "login" ? "signIn" : "signUp";
+  const providerFlow = mode === "login" ? "signIn" : "signUp";
   const isLogin = mode === "login";
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationState = location.state as { redirectTo?: string } | null;
+  const redirectTo = locationState?.redirectTo ?? "/review";
 
-  const title = isCredentialsStep
-    ? isLogin
-      ? "Welcome back"
-      : "Create your account"
-    : "Check your email";
-  const description = isCredentialsStep
-    ? isLogin
-      ? "Sign in with your email and password."
-      : "Sign up to create a new account."
-    : "Enter the verification code sent to your inbox.";
+  const title = isLogin ? "Welcome back" : "Create your account";
+  const description = isLogin
+    ? "Sign in with your email and password."
+    : "Sign up to create a new account.";
 
   return (
-    <div className="w-full max-w-md mx-auto">
-      <Card>
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
+    <div className="mx-auto w-full max-w-md">
+      <Card className="border-border/60 bg-card/80 shadow-2xl shadow-primary/10 backdrop-blur-xl">
+        <CardHeader className="border-b bg-gradient-to-r from-primary/12 via-accent/10 to-secondary/18">
+          <CardTitle className="text-xl">{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </CardHeader>
-        <CardContent>
-          {isCredentialsStep ? (
-            <form
-              className="space-y-4"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                setError(null);
-                const formData = new FormData(event.currentTarget);
-                try {
-                  const result = await signIn("password", formData);
-                  if (!result.signingIn) {
-                    setStep({ email: formData.get("email") as string });
-                  }
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Authentication failed");
+        <CardContent className="pt-6">
+          <form
+            className="space-y-4"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setError(null);
+              const formData = new FormData(event.currentTarget);
+              try {
+                const result = await signIn("password", formData);
+                if (result.signingIn) {
+                  navigate(redirectTo, { replace: true });
+                  return;
                 }
-              }}
-            >
-              <div className="space-y-2">
-                <Label htmlFor="auth-email">Email</Label>
-                <Input id="auth-email" name="email" type="email" placeholder="you@example.com" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="auth-password">Password</Label>
-                <Input
-                  id="auth-password"
-                  name="password"
-                  type="password"
-                  placeholder="Enter your password"
-                  required
-                />
-              </div>
-              <input name="flow" type="hidden" value={providerFlow} />
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="space-y-2 pt-1">
-                <Button className="w-full" type="submit">
-                  {isLogin ? "Login" : "Register"}
-                </Button>
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  type="button"
-                  onClick={() => signIn("google", { redirectTo: "/" })}
-                >
-                  Continue with Google
-                </Button>
-                <Button
-                  className="w-full"
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    setStep(isLogin ? "register" : "login");
-                  }}
-                >
-                  {isLogin ? "Don't have an account? Register" : "Already have an account? Login"}
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <form
-              className="space-y-4"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                setError(null);
-                const formData = new FormData(event.currentTarget);
-                try {
-                  await signIn("password", formData);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Verification failed");
+                if (isLogin) {
+                  setError("Invalid email or password");
+                  return;
                 }
-              }}
-            >
-              <div className="space-y-2">
-                <Label htmlFor="verification-code">Verification code</Label>
-                <Input id="verification-code" name="code" placeholder="Enter code" type="text" required />
-              </div>
-              <input name="flow" type="hidden" value="email-verification" />
-              <input name="email" value={step.email} type="hidden" />
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="space-y-2 pt-1">
-                <Button className="w-full" type="submit">
-                  Continue
-                </Button>
-                <Button
-                  className="w-full"
-                  variant="outline"
-                  type="button"
-                  onClick={() => signIn("google", { redirectTo: "/" })}
-                >
-                  Continue with Google
-                </Button>
-                <Button
-                  className="w-full"
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    setStep(initialMode);
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          )}
+                setError("Could not create account. Please try again.");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Authentication failed");
+              }
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="auth-email">Email</Label>
+              <Input id="auth-email" name="email" type="email" placeholder="you@example.com" required />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="auth-password">Password</Label>
+              <Input
+                id="auth-password"
+                name="password"
+                type="password"
+                placeholder="Enter your password"
+                required
+              />
+            </div>
+            <input name="flow" type="hidden" value={providerFlow} />
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <div className="space-y-2 pt-1">
+              <Button className="w-full bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90" type="submit">
+                {isLogin ? "Login" : "Register"}
+              </Button>
+              <Button
+                className="w-full"
+                variant="secondary"
+                type="button"
+                onClick={() => signIn("google", { redirectTo })}
+              >
+                Continue with Google
+              </Button>
+              <Button
+                className="w-full"
+                variant="ghost"
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setMode(isLogin ? "register" : "login");
+                }}
+              >
+                {isLogin ? "Don't have an account? Register" : "Already have an account? Login"}
+              </Button>
+            </div>
+          </form>
         </CardContent>
       </Card>
     </div>

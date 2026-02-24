@@ -1,17 +1,26 @@
-### Building and running your application
+### Run the full stack with Docker Compose
 
-When you're ready, start your application by running:
-`docker compose up --build`.
+Start all services:
 
-### Deploying your application to the cloud
+```bash
+docker compose up --build
+```
 
-First, build your image, e.g.: `docker build -t myapp .`.
-If your cloud uses a different CPU architecture than your development
-machine (e.g., you are on a Mac M1 and your cloud provider is amd64),
-you'll want to build the image for that platform, e.g.:
-`docker build --platform=linux/amd64 -t myapp .`.
+This starts:
 
-Then, push it to your registry, e.g. `docker push myregistry.com/myapp`.
+- `frontend` on `http://localhost:5173`
+- `scraper-api` on `http://localhost:8001`
+- `convex` on `http://localhost:3210` (and `3211`)
 
-Consult Docker's [getting started](https://docs.docker.com/go/get-started-sharing/)
-docs for more detail on building and pushing.
+### Environment overrides
+
+Optional overrides:
+
+- `VITE_CONVEX_URL` (default: `http://localhost:3210`)
+- `VITE_API_PROXY_TARGET` (default in compose: `http://scraper-api:8001`)
+
+Example:
+
+```bash
+VITE_CONVEX_URL=http://localhost:3210 docker compose up --build
+```
