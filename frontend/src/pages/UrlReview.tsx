@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { api } from "../../../backend/convex/_generated/api";
+import { useAuth } from "@workos-inc/authkit-react";
+import { api } from "../../../backend/convex/_generated/api.js";
 import type { Id } from "../../../backend/convex/_generated/dataModel";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Badge } from "../components/ui/badge";
@@ -141,7 +141,7 @@ function UrlReview() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [scrapeData, setScrapeData] = useState<ScraperResponse | null>(null);
-    const { signOut } = useAuthActions();
+    const { signOut } = useAuth();
     const startUrlReviewWithDetails = useAction(api.myFunctions.startUrlReviewWithDetails);
     const auditData = useQuery(
         api.myFunctions.getAudit,
@@ -154,6 +154,7 @@ function UrlReview() {
             return;
         }
 
+        // Keep the user input flexible, but send a canonical URL to backend workflows.
         const normalizedUrl = normalizeUrlInput(url);
         setLoading(true);
         setError(null);
@@ -175,6 +176,7 @@ function UrlReview() {
         }
     };
 
+    // Derived view state from a combination of live audit status + crawl payload.
     const audit = auditData?.audit;
     const site = auditData?.site;
     const issues = (audit?.issues ?? []) as AuditIssue[];

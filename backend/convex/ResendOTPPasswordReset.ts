@@ -35,7 +35,9 @@ export const ResendOTPPasswordReset = Resend({
     if (error) {
       const message =
         typeof error === "object" && error !== null && "message" in error
-          ? String((error as { message?: unknown }).message ?? "")
+          ? (typeof (error as { message?: unknown }).message === "string"
+              ? (error as { message?: string }).message
+              : "")
           : "";
       throw new Error(`Could not send password reset email: ${message || "Unknown Resend error"}`);
     }

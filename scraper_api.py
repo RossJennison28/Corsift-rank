@@ -8,6 +8,7 @@ import requests
 
 app = FastAPI()
 
+# Request payload accepted by the crawler endpoint.
 class UrlCrawl(BaseModel):
     start_url: HttpUrl
     max_pages: int = 500
@@ -23,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# Normalizes URLs so duplicates are easier to detect while crawling.
 def normalize_url(raw_url: str) -> str:
     no_fragment, _ = urldefrag(raw_url)
     p = urlparse(no_fragment)
@@ -57,11 +58,12 @@ def crawl_url(body: UrlCrawl):
         same_domain_only=body.same_domain_only
     )
 
+# Breadth-first crawl constrained by page limit + depth.
 def crawl_site(start_url: str, max_pages: int, max_depth: int, include_subdomains: bool, same_domain_only: bool):
     root = normalize_url(start_url)
     root_host = urlparse(root).netloc.lower()
 
-    queue = deque([(root, 0)])
+    queue = deque([(root, 0)])  # (url, depth)
     visited = set()
     pages = []
 
@@ -80,6 +82,7 @@ def crawl_site(start_url: str, max_pages: int, max_depth: int, include_subdomain
             continue
 
         try:
+            # Skip non-HTML and unreachable URLs early.
             r = requests.get(current_url, timeout=10, headers={"User-Agent": "CorsiftBot/1.0"})
             r.raise_for_status()
             if "text/html" not in r.headers.get("Content-Type", ""):
@@ -145,4 +148,5 @@ def crawl_site(start_url: str, max_pages: int, max_depth: int, include_subdomain
             "meta": meta
         })
 
+    # Response shape is consumed directly by the Convex action layer and frontend.
     return { "start_url": root, "pages_crawled": len(pages), "visited_count": len(visited), "pages": pages }

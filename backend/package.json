@@ -4,17 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:frontend dev:backend",
-    "dev:frontend": "vite --open",
+    "dev": "npm run dev:backend",
     "dev:backend": "convex dev",
-    "predev": "convex dev --until-success && convex dashboard",
-    "build": "tsc -b && vite build",
-    "lint": "tsc && eslint .  --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "predev": "convex dev --until-success",
+    "lint": "tsc -p convex/tsconfig.json --noEmit && eslint .  --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
-    "@auth/core": "^0.37.0",
-    "@convex-dev/auth": "^0.0.90",
     "convex": "^1.31.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

@@ -1,15 +1,13 @@
-import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// All tables have been defined below.
-// Need to at .indexes() to any field that will be commonly queried against for better performance.
+// Core application schema. Indexes are added on fields commonly used for lookups.
 
 export default defineSchema({
-  ...authTables,
+  // Per-user billing and onboarding state.
   userProfiles: defineTable({
-    userId: v.id("users"),
-    plan: v.union(v.literal("starter"), v.literal("growth"), v.literal("pro")),
+    userId: v.string(),
+    plan: v.union(v.literal("default"),v.literal("starter"), v.literal("growth"), v.literal("pro")),
     subscriptionStatus: v.union(v.literal("inactive"), v.literal("trialing"), v.literal("active"), v.literal("past_due"), v.literal("canceled")),
     onboardingComplete: v.boolean(),
     stripeCustomerId: v.optional(v.string()),
@@ -23,8 +21,9 @@ export default defineSchema({
   .index("byStripeCustomerId", ["stripeCustomerId"])
   .index("byStripeSubscriptionId", ["stripeSubscriptionId"]),
 
+  // User-owned websites tracked by the product.
   sites: defineTable({
-    userId: v.id("users"),
+    userId: v.string(),
     url: v.string(),
     name: v.string(),
     cmsType: v.union(v.literal("wordpress"), v.literal("shopify"), v.null()),
@@ -41,6 +40,7 @@ export default defineSchema({
   .index("byUserId", ["userId"])
   .index("byUserIdAndUrl", ["userId", "url"]),
 
+  // Crawl/audit runs and their normalized issue output.
   audits: defineTable({
     siteId: v.id("sites"),
     status: v.union(v.literal("pending"), v.literal("crawling"), v.literal("analysing"), v.literal("complete"), v.literal("failed")),
@@ -63,6 +63,7 @@ export default defineSchema({
   .index("bySiteIdAndCompletedAt", ["siteId", "completedAt"])
   .index("bySiteIdAndCreatedAt", ["siteId", "createdAt"]),
   
+  // Weekly recommended tasks generated from site findings.
   actionPlans: defineTable({
     siteId: v.id("sites"),
     weekStart: v.string(),
@@ -82,6 +83,7 @@ export default defineSchema({
   .index("bySiteId", ["siteId"])
   .index("bySiteIdAndWeekStart", ["siteId", "weekStart"]),
 
+  // Draft/published content generated for a site.
   content: defineTable({
     siteId: v.id("sites"),
     title: v.string(),
@@ -99,6 +101,7 @@ export default defineSchema({
   .index("bySiteId", ["siteId"])
   .index("bySiteIdAndSlug", ["siteId", "slug"]),
 
+  // Keyword ranking snapshots over time.
   rankings: defineTable({
     siteId: v.id("sites"),
     keyword: v.string(),

@@ -1,15 +1,7 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import {
-  action,
-  internalAction,
-  internalMutation,
-  mutation,
-  query,
-  type MutationCtx,
-} from "./_generated/server";
+import { action, internalAction, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 
 type AuditIssue = {
   severity: "low" | "medium" | "high";
@@ -55,9 +47,10 @@ type StartUrlReviewWithDetailsResult = {
   crawl: CrawlResponse;
 };
 
+// Creates or reuses a site for this user, then creates a pending audit record.
 async function createAuditForUser(
   db: MutationCtx["db"],
-  userId: Id<"users">,
+  userId: string,
   url: string
 ) {
   const now = Date.now();
@@ -100,6 +93,7 @@ async function createAuditForUser(
   return { auditId, siteId: site._id, normalizedUrl };
 }
 
+// Reads the scraper API base URL from Convex action environment variables.
 function getScraperApiUrl() {
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
     ?.env;
@@ -132,6 +126,7 @@ async function crawlSite(startUrl: string): Promise<CrawlResponse> {
   return (await response.json()) as CrawlResponse;
 }
 
+// Converts raw crawler page output into the issue shape used by audits.
 function buildIssuesFromPages(pages: CrawlPage[]): AuditIssue[] {
   const issues: AuditIssue[] = [];
 
@@ -171,25 +166,62 @@ function buildIssuesFromPages(pages: CrawlPage[]): AuditIssue[] {
   return issues;
 }
 
-export const getUserProfile = query({
-  args: { userId: v.id("users") },
-  handler: async ({ db }, { userId }) => {
-    const profile = await db
+// Ensures each authenticated user has exactly one profile document.
+export const checkUserProfile = mutation({
+  args: {},
+  handler: async( {db, auth }) => {
+    const identity = await auth.getUserIdentity();
+    const userId = identity?.subject;
+    if(!userId) throw new Error("User is not authenticated")
+
+    const existing = await db
       .query("userProfiles")
       .withIndex("byUserId", (q) => q.eq("userId", userId))
-      .unique();
+      .unique(); 
 
-    if (!profile) {
-      throw new Error("User profile not found");
+    if (existing) return existing;
+
+    const now = Date.now();
+    const profileId = await db.insert("userProfiles", {
+      userId,
+      plan: "default",
+      subscriptionStatus: "inactive",
+      onboardingComplete: false,
+      createdAt:now,
+      updatedAt:now,
+    });
+
+    return await db.get(profileId);
+
+    },
+});
+
+// Returns the current authenticated user's profile only.
+export const getUserProfile = query({
+  args:{},
+  handler: async ({ auth, db}) => {
+    const identity = await auth.getUserIdentity();
+    const userId = identity?.subject;
+    if (!userId) {
+      throw new Error("Account not authenticated");
+    }
+    const profile = await db
+    .query("userProfiles")
+    .withIndex("byUserId", (q) => q.eq("userId", userId))
+    .unique();
+
+    if(!profile) {
+      throw new Error("User profile not found")
     }
 
     return profile;
   },
 });
 
+// Internal helper used by actions to create audit records with explicit userId.
 export const createAuditRecord = internalMutation({
   args: {
-    userId: v.id("users"),
+    userId: v.string(),
     url: v.string(),
   },
   handler: async ({ db }, { userId, url }) => {
@@ -197,12 +229,14 @@ export const createAuditRecord = internalMutation({
   },
 });
 
+// Starts an asynchronous review run and returns identifiers immediately.
 export const startUrlReview = mutation({
   args: {
     url: v.string(),
   },
   handler: async ({ db, scheduler, auth }, { url }) => {
-    const userId = await getAuthUserId({ auth });
+    const identity = await auth.getUserIdentity();
+    const userId = identity?.subject;
     if (!userId) {
       throw new Error("User is not authenticated");
     }
@@ -218,12 +252,14 @@ export const startUrlReview = mutation({
   },
 });
 
+// Starts a review and waits for crawl + analysis results in the same action call.
 export const startUrlReviewWithDetails = action({
   args: {
     url: v.string(),
   },
   handler: async (ctx, { url }): Promise<StartUrlReviewWithDetailsResult> => {
-    const userId = await getAuthUserId({ auth: ctx.auth });
+    const identity = await ctx.auth.getUserIdentity();
+    const userId = identity?.subject;
     if (!userId) {
       throw new Error("User is not authenticated");
     }
@@ -277,12 +313,14 @@ export const startUrlReviewWithDetails = action({
   },
 });
 
+// Fetches one audit if it belongs to the authenticated user.
 export const getAudit = query({
   args: {
     auditId: v.id("audits"),
   },
   handler: async ({ db, auth }, { auditId }) => {
-    const userId = await getAuthUserId({ auth });
+    const identity = await auth.getUserIdentity();
+    const userId = identity?.subject;
     if (!userId) {
       throw new Error("User is not authenticated");
     }
@@ -301,6 +339,7 @@ export const getAudit = query({
   },
 });
 
+// Finalizes an audit with computed issues and page counts.
 export const completeAudit = internalMutation({
   args: {
     auditId: v.id("audits"),
@@ -326,6 +365,7 @@ export const completeAudit = internalMutation({
   },
 });
 
+// Shared status patch used by both sync and scheduled review flows.
 export const setAuditStatus = internalMutation({
   args: {
     auditId: v.id("audits"),
@@ -345,6 +385,7 @@ export const setAuditStatus = internalMutation({
   },
 });
 
+// Background runner used when reviews are scheduled via scheduler.runAfter.
 export const runUrlReview = internalAction({
   args: {
     auditId: v.id("audits"),

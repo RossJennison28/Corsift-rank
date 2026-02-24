@@ -1,4 +1,4 @@
-import { useAuthActions } from "@convex-dev/auth/react";
+import { useAuth } from "@workos-inc/authkit-react";
 import { useConvexAuth } from "convex/react";
 import { ArrowRight, Gauge, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 function Home() {
   const navigate = useNavigate();
   const { isLoading, isAuthenticated } = useConvexAuth();
-  const { signOut } = useAuthActions();
+  const { signOut } = useAuth();
 
   if (isLoading) {
     return (

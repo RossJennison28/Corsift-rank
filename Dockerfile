@@ -9,6 +9,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install --no-audit --no-fund
 COPY frontend/ ./
+# Frontend imports Convex generated API files from backend/convex/_generated.
+COPY backend/convex/_generated /app/backend/convex/_generated
 EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 

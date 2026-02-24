@@ -32,7 +32,6 @@ export default defineConfig([
       parserOptions: {
         project: [
           "./tsconfig.node.json",
-          "./tsconfig.app.json",
           "./convex/tsconfig.json",
         ],
       },

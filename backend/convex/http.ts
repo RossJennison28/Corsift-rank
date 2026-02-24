@@ -1,7 +1,6 @@
 import { httpRouter } from "convex/server";
-import { auth } from "./auth";
 
 const http = httpRouter();
-auth.addHttpRoutes(http);
+// Add public webhook/httpAction routes here when external systems need to POST to Convex.
 
 export default http;

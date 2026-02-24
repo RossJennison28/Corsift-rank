@@ -1,11 +1,9 @@
-import { useAuthActions } from "@convex-dev/auth/react";
+import { useAuth } from "@workos-inc/authkit-react";
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
 
 type AuthMode = "login" | "register";
 
@@ -14,20 +12,18 @@ type AuthFormProps = {
 };
 
 function AuthForm({ initialMode }: AuthFormProps) {
-  const { signIn } = useAuthActions();
+  const { signIn, signUp } = useAuth();
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [error, setError] = useState<string | null>(null);
-  const providerFlow = mode === "login" ? "signIn" : "signUp";
   const isLogin = mode === "login";
-  const navigate = useNavigate();
   const location = useLocation();
   const locationState = location.state as { redirectTo?: string } | null;
   const redirectTo = locationState?.redirectTo ?? "/review";
 
   const title = isLogin ? "Welcome back" : "Create your account";
   const description = isLogin
-    ? "Sign in with your email and password."
-    : "Sign up to create a new account.";
+    ? "Sign in using WorkOS hosted authentication."
+    : "Create your account using WorkOS hosted authentication.";
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -42,38 +38,18 @@ function AuthForm({ initialMode }: AuthFormProps) {
             onSubmit={async (event) => {
               event.preventDefault();
               setError(null);
-              const formData = new FormData(event.currentTarget);
               try {
-                const result = await signIn("password", formData);
-                if (result.signingIn) {
-                  navigate(redirectTo, { replace: true });
-                  return;
-                }
+                // WorkOS handles the hosted auth screens; we only pass the return route.
                 if (isLogin) {
-                  setError("Invalid email or password");
-                  return;
+                  await signIn({ state: { returnTo: redirectTo } });
+                } else {
+                  await signUp({ state: { returnTo: redirectTo } });
                 }
-                setError("Could not create account. Please try again.");
               } catch (err) {
                 setError(err instanceof Error ? err.message : "Authentication failed");
               }
             }}
           >
-            <div className="space-y-2">
-              <Label htmlFor="auth-email">Email</Label>
-              <Input id="auth-email" name="email" type="email" placeholder="you@example.com" required />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="auth-password">Password</Label>
-              <Input
-                id="auth-password"
-                name="password"
-                type="password"
-                placeholder="Enter your password"
-                required
-              />
-            </div>
-            <input name="flow" type="hidden" value={providerFlow} />
             {error && (
               <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
@@ -81,15 +57,7 @@ function AuthForm({ initialMode }: AuthFormProps) {
             )}
             <div className="space-y-2 pt-1">
               <Button className="w-full bg-gradient-to-r from-primary to-accent text-primary-foreground hover:opacity-90" type="submit">
-                {isLogin ? "Login" : "Register"}
-              </Button>
-              <Button
-                className="w-full"
-                variant="secondary"
-                type="button"
-                onClick={() => signIn("google", { redirectTo })}
-              >
-                Continue with Google
+                {isLogin ? "Continue to Login" : "Continue to Register"}
               </Button>
               <Button
                 className="w-full"

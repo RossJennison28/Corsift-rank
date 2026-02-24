@@ -13,6 +13,10 @@ export default defineConfig({
     },
   },
   server: {
+    fs: {
+      // Allow imports from sibling backend folder (Convex generated API types/helpers).
+      allow: [path.resolve(__dirname, "..")],
+    },
     proxy: {
       "/api": {
         target: apiProxyTarget,
