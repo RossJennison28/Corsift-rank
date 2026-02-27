@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAction, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useAuth } from "@workos-inc/authkit-react";
 import { api } from "../../../backend/convex/_generated/api.js";
 import type { Id } from "../../../backend/convex/_generated/dataModel";
@@ -142,7 +142,7 @@ function UrlReview() {
     const [error, setError] = useState<string | null>(null);
     const [scrapeData, setScrapeData] = useState<ScraperResponse | null>(null);
     const { signOut } = useAuth();
-    const startUrlReviewWithDetails = useAction(api.myFunctions.startUrlReviewWithDetails);
+    const startUrlReview = useMutation(api.myFunctions.startUrlReview);
     const auditData = useQuery(
         api.myFunctions.getAudit,
         auditId ? { auditId } : "skip"
@@ -162,9 +162,8 @@ function UrlReview() {
         setAuditId(null);
 
         try {
-            const result = await startUrlReviewWithDetails({ url: normalizedUrl });
+            const result = await startUrlReview({ url: normalizedUrl });
             setAuditId(result.auditId);
-            setScrapeData(result.crawl);
         } catch (err: unknown) {
             if (err instanceof Error) {
                 setError(err.message);

@@ -7,6 +7,8 @@
     "/Users/ross/Library/Python/3.9/lib/python/site-packages"
   ],
   "include": [
-    "scraper_api.py"
+    "services/scraper_api/main.py",
+    "services/scraper_api/service.py",
+    "services/scraper_api/models.py"
   ]
 }

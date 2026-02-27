@@ -1,28 +1,7 @@
 from collections import deque
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urldefrag, urljoin, urlunparse
 import requests
-
-app = FastAPI()
-
-# Request payload accepted by the crawler endpoint.
-class UrlCrawl(BaseModel):
-    start_url: HttpUrl
-    max_pages: int = 500
-    max_depth: int = 2
-    same_domain_only: bool = True
-    include_subdomains: bool = False
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Normalizes URLs so duplicates are easier to detect while crawling.
 def normalize_url(raw_url: str) -> str:
@@ -48,15 +27,6 @@ def meta_by_property(soup, prop: str) -> str:
     value = tag.get("content") if tag else None
     return value.strip() if isinstance(value, str) else ""
 
-@app.post("/crawl")
-def crawl_url(body: UrlCrawl):
-    return crawl_site(
-        start_url=str(body.start_url),
-        max_pages=body.max_pages,
-        max_depth=body.max_depth,
-        include_subdomains=body.include_subdomains,
-        same_domain_only=body.same_domain_only
-    )
 
 # Breadth-first crawl constrained by page limit + depth.
 def crawl_site(start_url: str, max_pages: int, max_depth: int, include_subdomains: bool, same_domain_only: bool):

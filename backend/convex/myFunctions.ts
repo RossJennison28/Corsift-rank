@@ -1,15 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { action, internalAction, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
-
-type AuditIssue = {
-  severity: "low" | "medium" | "high";
-  category: "technical" | "content" | "seo";
-  title: string;
-  description: string;
-  pageUrl: string;
-};
+import { internalAction, internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 
 type CrawlPage = {
   url: string;
@@ -41,11 +32,6 @@ type CrawlResponse = {
   pages: CrawlPage[];
 };
 
-type StartUrlReviewWithDetailsResult = {
-  auditId: Id<"audits">;
-  siteId: Id<"sites">;
-  crawl: CrawlResponse;
-};
 
 // Creates or reuses a site for this user, then creates a pending audit record.
 async function createAuditForUser(
@@ -106,7 +92,7 @@ function getScraperApiUrl() {
   return scraperApiUrl;
 }
 
-async function crawlSite(startUrl: string): Promise<CrawlResponse> {
+async function crawlSite(startUrl: string, auditId: string): Promise<CrawlResponse> {
   const response = await fetch(`${getScraperApiUrl()}/crawl`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -116,6 +102,7 @@ async function crawlSite(startUrl: string): Promise<CrawlResponse> {
       max_depth: 2,
       same_domain_only: true,
       include_subdomains: false,
+      audit_id: auditId,
     }),
   });
 
@@ -124,46 +111,6 @@ async function crawlSite(startUrl: string): Promise<CrawlResponse> {
   }
 
   return (await response.json()) as CrawlResponse;
-}
-
-// Converts raw crawler page output into the issue shape used by audits.
-function buildIssuesFromPages(pages: CrawlPage[]): AuditIssue[] {
-  const issues: AuditIssue[] = [];
-
-  for (const page of pages) {
-    if (!page.title?.trim()) {
-      issues.push({
-        severity: "medium",
-        category: "content",
-        title: "Missing page title",
-        description: "Page has no <title> tag content.",
-        pageUrl: page.url,
-      });
-    }
-
-    if (!page.meta?.description?.trim()) {
-      issues.push({
-        severity: "medium",
-        category: "seo",
-        title: "Missing meta description",
-        description: "Page is missing meta description.",
-        pageUrl: page.url,
-      });
-    }
-
-    const missingAlt = page.images.filter((img) => !img.alt?.trim()).length;
-    if (missingAlt > 0) {
-      issues.push({
-        severity: "low",
-        category: "content",
-        title: "Images missing alt text",
-        description: `${missingAlt} image(s) missing alt text.`,
-        pageUrl: page.url,
-      });
-    }
-  }
-
-  return issues;
 }
 
 // Ensures each authenticated user has exactly one profile document.
@@ -191,7 +138,7 @@ export const checkUserProfile = mutation({
       updatedAt:now,
     });
 
-    return await db.get(profileId);
+    return await db.get("userProfiles", profileId);
 
     },
 });
@@ -249,67 +196,6 @@ export const startUrlReview = mutation({
     });
 
     return { auditId: created.auditId, siteId: created.siteId };
-  },
-});
-
-// Starts a review and waits for crawl + analysis results in the same action call.
-export const startUrlReviewWithDetails = action({
-  args: {
-    url: v.string(),
-  },
-  handler: async (ctx, { url }): Promise<StartUrlReviewWithDetailsResult> => {
-    const identity = await ctx.auth.getUserIdentity();
-    const userId = identity?.subject;
-    if (!userId) {
-      throw new Error("User is not authenticated");
-    }
-
-    const created: {
-      auditId: Id<"audits">;
-      siteId: Id<"sites">;
-      normalizedUrl: string;
-    } = await ctx.runMutation(internal.myFunctions.createAuditRecord, {
-      userId,
-      url,
-    });
-
-    try {
-      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
-        auditId: created.auditId,
-        status: "crawling",
-      });
-
-      const crawl = await crawlSite(created.normalizedUrl);
-
-      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
-        auditId: created.auditId,
-        status: "analysing",
-      });
-
-      const issues = buildIssuesFromPages(crawl.pages);
-
-      await ctx.runMutation(internal.myFunctions.completeAudit, {
-        auditId: created.auditId,
-        issues,
-        pagesScanned: crawl.pages_crawled,
-      });
-
-      return {
-        auditId: created.auditId,
-        siteId: created.siteId,
-        crawl,
-      };
-    } catch (error) {
-      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
-        auditId: created.auditId,
-        status: "failed",
-      });
-
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error("URL review failed");
-    }
   },
 });
 
@@ -397,21 +283,9 @@ export const runUrlReview = internalAction({
         auditId,
         status: "crawling",
       });
+      
+      await crawlSite(startUrl, auditId);
 
-      const crawl = await crawlSite(startUrl);
-
-      await ctx.runMutation(internal.myFunctions.setAuditStatus, {
-        auditId,
-        status: "analysing",
-      });
-
-      const issues = buildIssuesFromPages(crawl.pages);
-
-      await ctx.runMutation(internal.myFunctions.completeAudit, {
-        auditId,
-        issues,
-        pagesScanned: crawl.pages_crawled,
-      });
     } catch {
       await ctx.runMutation(internal.myFunctions.setAuditStatus, {
         auditId,

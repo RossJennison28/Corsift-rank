@@ -5,6 +5,25 @@ services:
       target: convex
     env_file:
       - backend/.env.local
+    environment:
+      # Default to non-interactive local/anonymous dev in containers.
+      # Override from your shell/.env to use a cloud deployment instead.
+      CONVEX_AGENT_MODE: ${CONVEX_AGENT_MODE:-anonymous}
+      CONVEX_DEPLOYMENT: ${CONVEX_DEPLOYMENT:-}
+      CONVEX_DEPLOY_KEY: ${CONVEX_DEPLOY_KEY:-}
+      SCRAPER_API_URL: ${SCRAPER_API_URL:-http://scraper-api:8001}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const net=require('net');const s=net.createConnection(3210,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),2000);",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 20s
     ports:
       - "3210:3210"
       - "3211:3211"
@@ -13,6 +32,22 @@ services:
     build:
       context: .
       target: scraper-api
+    environment:
+      SCRAPER_CORS_ORIGINS: ${SCRAPER_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CONVEX_WEBHOOK_URL: ${CONVEX_WEBHOOK_URL:-http://convex:3210/webhooks/crawl-results}
+      CRAWL_RESULTS_WEBHOOK_SECRET: ${CRAWL_RESULTS_WEBHOOK_SECRET}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 10s
     ports:
       - "8001:8001"
 
@@ -20,11 +55,22 @@ services:
     build:
       context: .
       target: frontend
+    env_file:
+      - backend/.env.local
     depends_on:
-      - scraper-api
-      - convex
+      scraper-api:
+        condition: service_healthy
+      convex:
+        condition: service_healthy
     environment:
       VITE_API_PROXY_TARGET: ${VITE_API_PROXY_TARGET:-http://scraper-api:8001}
       VITE_CONVEX_URL: ${VITE_CONVEX_URL:-http://localhost:3210}
+      VITE_WORKOS_REDIRECT_URI: ${VITE_WORKOS_REDIRECT_URI:-http://localhost:5173/callback}
+    command:
+      [
+        "sh",
+        "-c",
+        "export VITE_WORKOS_CLIENT_ID=\"$${VITE_WORKOS_CLIENT_ID:-$${WORKOS_CLIENT_ID}}\" && npm run dev -- --host 0.0.0.0 --port 5173",
+      ]
     ports:
       - "5173:5173"

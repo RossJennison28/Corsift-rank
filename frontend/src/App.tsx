@@ -40,6 +40,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/callback" element={<div>Completing sign in...</div>} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>
